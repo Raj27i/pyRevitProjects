@@ -1,48 +1,55 @@
 # -*- coding: utf-8 -*-
-__title__   = "Bulk Schedule Export"
+__title__   = "View Aligner"
 __doc__     = """Version = 1.0
-Date    = 15.06.2024
-________________________________________________________________
+
+
+
+View Aligner
+
 Description:
+This PyRevit script helps you align views across multiple sheets in your Revit project. 
+It's designed to save time and ensure consistency when you need to position views in the 
+same location across different sheets. 
 
-This is the placeholder for a .pushbutton
-You can use it to start your pyRevit Add-In
+The tool works by taking the position of a view on a source sheet and applying that same 
+position to views on one or more target sheets. This is particularly useful when you have 
+a standard layout that needs to be replicated across multiple sheets.
 
-________________________________________________________________
-How-To:
+Key features:
+- Aligns views based on their center points
+- Allows selection of multiple target sheets for batch processing
+- Works with the first view found on each sheet
+- Provides a summary of successful alignments
 
-1. [Hold ALT + CLICK] on the button to open its source folder.
-You will be able to override this placeholder.
+Important notes:
+- This script assumes each sheet contains at least one view
+- If a sheet has multiple views, only the first view will be affected
+- Ensure your source sheet has the view positioned exactly where you want it
+- Back up your project before running this script on a large number of sheets
 
-2. Automate Your Boring Work ;)
+How to use:
+1. Run the script from the PyRevit tab.
+2. Select a single source sheet containing the view you want to align to.
+3. Select one or more target sheets to align.
+4. The script will align the views on target sheets to match the source.
+5. Review the results message for successful alignments.
 
-________________________________________________________________
-TODO:
-[FEATURE] - Describe Your ToDo Tasks Here
-________________________________________________________________
-Last Updates:
-- [15.06.2024] v1.0 Change Description
-- [10.06.2024] v0.5 Change Description
-- [05.06.2024] v0.1 Change Description 
-________________________________________________________________
-Author: Erik Frits"""
+Author: Durai
+
+
+
+"""
 
 # ╦╔╦╗╔═╗╔═╗╦═╗╔╦╗╔═╗
 # ║║║║╠═╝║ ║╠╦╝ ║ ╚═╗
 # ╩╩ ╩╩  ╚═╝╩╚═ ╩ ╚═╝
 #==================================================
 from Autodesk.Revit.DB import *
-from Autodesk.Revit.UI import *
-from Autodesk.Revit.UI.Selection import *
 
 #.NET Imports
 import clr
 clr.AddReference('System')
 from System.Collections.Generic import List
-
-import os
-from pyrevit import forms
-from pyrevit import script
 
 
 # ╦  ╦╔═╗╦═╗╦╔═╗╔╗ ╦  ╔═╗╔═╗
@@ -59,75 +66,73 @@ doc    = __revit__.ActiveUIDocument.Document #type:Document
 # ╩ ╩╩ ╩╩╝╚╝
 #==================================================
 
-from pyrevit import script
+
+
+
+# -*- coding: utf-8 -*-
+from pyrevit import revit, DB, UI
 from pyrevit import forms
-from pyrevit import DB
-from pyrevit.framework import List
-import os
 
-# Get active Revit document
-doc = __revit__.ActiveUIDocument.Document
+doc = revit.doc
 
-# Ask user to select a schedule view
-from pyrevit import script
-from pyrevit import forms
-from pyrevit import DB
-from pyrevit.framework import List
-import os
+def get_sheets():
+    return DB.FilteredElementCollector(doc).OfClass(DB.ViewSheet).ToElements()
 
-# Get active Revit document
-doc = __revit__.ActiveUIDocument.Document
+def get_view_on_sheet(sheet):
+    viewport_ids = sheet.GetAllViewports()
+    if viewport_ids:
+        viewport = doc.GetElement(viewport_ids[0])
+        return doc.GetElement(viewport.ViewId)
+    return None
 
-# Ask user to select multiple schedule views
-schedules = [v for v in DB.FilteredElementCollector(doc).OfClass(DB.ViewSchedule) if not v.IsTemplate]
+def get_view_center_on_sheet(sheet):
+    viewport_ids = sheet.GetAllViewports()
+    if viewport_ids:
+        viewport = doc.GetElement(viewport_ids[0])
+        return viewport.GetBoxCenter()
+    return None
 
-selected_schedules = forms.SelectFromList.show(
-    sorted(schedules, key=lambda x: x.Name),
-    title="Select Schedules to Export",
-    button_name="Select",
-    multiselect=True,
-    name_attr='Name'
-)
+def align_view(source_sheet, target_sheet):
+    source_center = get_view_center_on_sheet(source_sheet)
+    if not source_center:
+        print('No view found on the source sheet: {0}'.format(source_sheet.Name))
+        return False
+    
+    target_view = get_view_on_sheet(target_sheet)
+    if not target_view:
+        print('No view found on the target sheet: {0}'.format(target_sheet.Name))
+        return False
+    
+    target_viewport_ids = target_sheet.GetAllViewports()
+    if target_viewport_ids:
+        target_viewport = doc.GetElement(target_viewport_ids[0])
+        current_center = target_viewport.GetBoxCenter()
+        offset = source_center - current_center
+        DB.ElementTransformUtils.MoveElement(doc, target_viewport.Id, offset)
+        return True
+    return False
 
-# If no schedules selected, stop script
-if not selected_schedules:
-    script.exit()
+def main():
+    # Select source sheet
+    source_sheet = forms.select_sheets(title='Select Source Sheet', multiple=False)
+    if not source_sheet:
+        return
 
-# Ask user to select the folder to save the exported files
-selected_folder = forms.pick_folder(
-    title="Select Folder to Save Schedules"
-)
+    # Select multiple target sheets
+    target_sheets = forms.select_sheets(title='Select Target Sheets', multiple=True)
+    if not target_sheets:
+        return
 
-# If no folder is selected, stop script
-if not selected_folder:
-    script.exit()
+    # Align views
+    with revit.Transaction('Align Views'):
+        successful_alignments = 0
+        for target_sheet in target_sheets:
+            if align_view(source_sheet, target_sheet):
+                successful_alignments += 1
 
-# Set options for schedule export
-options = DB.ViewScheduleExportOptions()
+    forms.alert('Views aligned successfully on {0} out of {1} sheets!'.format(successful_alignments, len(target_sheets)), ok=True)
 
-options.TextQualifier = DB.ExportTextQualifier.DoubleQuote 
-
-# Iterate over selected schedules and export each as an Excel file
-for schedule in selected_schedules:
-    schedule_name = schedule.Name
-    file_path = os.path.join(selected_folder, "{}.xls".format(schedule_name))  # Set file extension to .xls
-
-    try:
-        # Export the schedule to Excel format
-        schedule.Export(selected_folder, "{}.xls".format(schedule_name), options)
-        script.get_output().print_md("**Schedule '{}' exported successfully to: {}**".format(schedule_name, file_path))
-    except Exception as e:
-        script.get_output().print_md("**Failed to export schedule '{}': {}**".format(schedule_name, e))
-
-
-
-#🤖 Automate Your Boring Work Here
-
-
-
+if __name__ == '__main__':
+    main()
 
 
-#==================================================
-#🚫 DELETE BELOW
-from Snippets._customprint import kit_button_clicked    # Import Reusable Function from 'lib/Snippets/_customprint.py'
-kit_button_clicked(btn_name=__title__)                  # Display Default Print Message
